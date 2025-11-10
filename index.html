@@ -1,0 +1,322 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Consulta de Activos - E.S.E. Hospital</title>
+  <script src="https://unpkg.com/html5-qrcode"></script>
+  <style>
+    body { font-family: Arial; background: #f7f7f7; padding: 20px; max-width: 600px; margin: 0 auto; }
+    .input-group { display: flex; gap: 10px; margin-bottom: 10px; flex-wrap: wrap; }
+    input { padding: 10px; flex: 1; min-width: 150px; border: 1px solid #ddd; border-radius: 5px; }
+    button { padding: 10px 20px; background: #4CAF50; color: white; border: none; border-radius: 5px; cursor: pointer; font-size: 16px; }
+    button:hover { background: #45a049; }
+    button#btnEscanear { background: #2196F3; }
+    button#btnEscanear:hover { background: #0b7dda; }
+    button#btnCerrarCamara { background: #f44336; }
+    button#btnCerrarCamara:hover { background: #da190b; }
+    .card { background: white; padding: 20px; border-radius: 10px; box-shadow: 0 2px 5px rgba(0,0,0,0.1); margin-top: 20px; }
+    #reader { width: 100%; margin: 20px 0; }
+    #reader video { width: 100%; border-radius: 10px; }
+    .camara-container { display: none; text-align: center; }
+    .camara-container.activa { display: block; }
+  </style>
+</head>
+<body>
+
+  <h2>🔍 Consulta de Activos Fijos</h2>
+  <div class="input-group">
+    <input id="codigo" placeholder="Ingrese o escanee el código" onkeypress="if(event.key==='Enter') buscarActivo()">
+    <button onclick="buscarActivo()">Buscar</button>
+    <button id="btnEscanear" onclick="activarEscaner()">📷 Escanear QR</button>
+  </div>
+
+  <div id="camaraContainer" class="camara-container">
+    <div id="reader"></div>
+    <button id="btnCerrarCamara" onclick="cerrarCamara()">Cerrar Cámara</button>
+  </div>
+
+  <div id="resultado"></div>
+
+  <script>
+    const sheetID = '1j2IBIMLleplv9MUxnaWy0IYeYoyungi_PCwd6H3Xd1Y';
+    const sheetName = 'Activos';
+    // Codificar el nombre de la hoja para la URL
+    // Usar tq= vacío para obtener TODAS las filas sin filtros ni consultas SQL
+    const url = `https://docs.google.com/spreadsheets/d/${sheetID}/gviz/tq?tqx=out:json&tq=&sheet=${encodeURIComponent(sheetName)}`;
+    
+    let html5QrCode = null;
+
+    async function buscarActivo(codigoEscaneado = null) {
+      const codigo = codigoEscaneado || document.getElementById('codigo').value.trim();
+      if (!codigo) return alert("Ingrese un código o escanee el QR");
+
+      // Cerrar cámara si está abierta
+      if (html5QrCode) {
+        cerrarCamara();
+      }
+
+      // Mostrar mensaje de carga
+      const div = document.getElementById('resultado');
+      div.innerHTML = "<p style='color:blue;'>Buscando...</p>";
+
+      try {
+        console.log('URL de búsqueda:', url);
+        const res = await fetch(url);
+        console.log('Estado de respuesta:', res.status, res.statusText);
+        
+        if (!res.ok) {
+          throw new Error(`Error HTTP: ${res.status} - ${res.statusText}`);
+        }
+        const text = await res.text();
+        console.log('Tamaño de respuesta:', text.length, 'caracteres');
+        console.log('Primeros 200 caracteres de respuesta:', text.substring(0, 200));
+        
+        // Parsear el JSON de Google Sheets
+        // La respuesta viene como: /*0_o*/ google.visualization.Query.setResponse({...})
+        let json;
+        try {
+          // Eliminar el prefijo /*0_o*/ o /*O_o*/ si existe
+          let cleanText = text.trim();
+          if (cleanText.startsWith('/*')) {
+            const endPrefix = cleanText.indexOf('*/');
+            if (endPrefix !== -1) {
+              cleanText = cleanText.substring(endPrefix + 2).trim();
+            }
+          }
+          
+          // Si viene envuelto en google.visualization.Query.setResponse
+          if (cleanText.includes('google.visualization.Query.setResponse')) {
+            // Buscar el contenido entre los paréntesis del setResponse
+            // Necesitamos encontrar el primer ( después de setResponse y el último )
+            const setResponseIdx = cleanText.indexOf('google.visualization.Query.setResponse');
+            const startIdx = cleanText.indexOf('(', setResponseIdx) + 1;
+            const endIdx = cleanText.lastIndexOf(')');
+            
+            if (startIdx > 0 && endIdx > startIdx) {
+              const jsonText = cleanText.substring(startIdx, endIdx);
+              json = JSON.parse(jsonText);
+            } else {
+              throw new Error('No se pudo extraer el JSON del callback');
+            }
+          }
+          // Método alternativo: Buscar el primer { y último } (método más común)
+          else {
+            const start = cleanText.indexOf('{');
+            const end = cleanText.lastIndexOf('}') + 1;
+            if (start !== -1 && end > start) {
+              const jsonText = cleanText.substring(start, end);
+              json = JSON.parse(jsonText);
+            } else {
+              // Último recurso: Intentar parsear directamente
+              json = JSON.parse(cleanText);
+            }
+          }
+          console.log('JSON parseado correctamente. Estructura:', Object.keys(json));
+        } catch (parseError) {
+          console.error('Error al parsear respuesta:', parseError);
+          console.log('Respuesta completa recibida:', text);
+          throw new Error('Error al procesar la respuesta de Google Sheets. Verifique que la hoja sea pública y accesible.');
+        }
+        
+        // Verificar estructura de datos
+        if (!json || !json.table || !json.table.rows) {
+          console.error('Estructura de datos inesperada:', json);
+          div.innerHTML = "<p style='color:red;'>Error: La estructura de datos no es la esperada. Verifique la configuración de la hoja.</p>";
+          return;
+        }
+        
+        const rows = json.table.rows;
+        console.log('Filas obtenidas:', rows.length);
+        console.log('Estructura completa de filas:', JSON.stringify(rows, null, 2));
+        
+        // Mostrar todos los códigos encontrados en las filas
+        console.log('=== TODOS LOS CÓDIGOS EN LA HOJA ===');
+        rows.forEach((row, idx) => {
+          if (row && row.c && row.c.length > 0 && row.c[0]) {
+            const celda = row.c[0];
+            console.log(`Fila ${idx}:`, {
+              v: celda.v,
+              f: celda.f,
+              valorUsado: celda.f !== null && celda.f !== undefined ? celda.f : celda.v,
+              tipoV: typeof celda.v,
+              tipoF: typeof celda.f
+            });
+          } else {
+            console.log(`Fila ${idx}: sin datos o celda vacía`);
+          }
+        });
+        console.log('=====================================');
+
+        if (!rows || rows.length === 0) {
+          div.innerHTML = "<p style='color:red;'>No se encontraron datos en la hoja. Verifique que la hoja tenga datos y sea pública.</p>";
+          return;
+        }
+
+        // Normalizar el código buscado como STRING (sin conversiones numéricas)
+        // Esto preserva ceros a la izquierda y permite códigos con letras
+        const codigoBuscado = String(codigo).trim();
+
+        let encontrado = null;
+        let codigosEncontrados = []; // Para debugging
+        let filasProcesadas = 0; // Contador de filas procesadas
+        
+        // Revisar todas las filas (empezar desde 0, pero verificar si la primera es encabezado)
+        for (let i = 0; i < rows.length; i++) {
+          const row = rows[i];
+          console.log(`Fila ${i}:`, row);
+          
+          if (!row || !row.c || row.c.length === 0) {
+            console.log(`Fila ${i} vacía o sin celdas`);
+            continue;
+          }
+          
+          const celdaCodigo = row.c[0];
+          console.log(`Fila ${i}, celda código:`, celdaCodigo);
+          
+          // Si la celda está completamente vacía (sin .v ni .f), continuar
+          if (!celdaCodigo || ((celdaCodigo.v === null || celdaCodigo.v === undefined) && 
+              (celdaCodigo.f === null || celdaCodigo.f === undefined))) {
+            console.log(`Fila ${i}, código vacío (sin v ni f)`);
+            continue;
+          }
+          
+          // Si es la primera fila y parece ser encabezado (texto "Codigo"), saltarla
+          if (i === 0) {
+            const primerValor = String(celdaCodigo.v || celdaCodigo.f || '').toLowerCase();
+            if (primerValor.includes('codigo') || primerValor.includes('código')) {
+              console.log('Saltando fila de encabezados');
+              continue;
+            }
+          }
+          
+          // Obtener el valor de la celda como STRING (puede venir en .v o .f)
+          // Priorizar .f (formato) si está disponible, ya que preserva el formato original
+          let valorCelda = celdaCodigo.f !== null && celdaCodigo.f !== undefined 
+            ? celdaCodigo.f 
+            : (celdaCodigo.v !== null && celdaCodigo.v !== undefined ? celdaCodigo.v : null);
+          
+          // Si el valor es null o undefined, continuar
+          if (valorCelda === null || valorCelda === undefined) {
+            console.log(`Fila ${i}, valor nulo`);
+            continue;
+          }
+          
+          // Convertir a string y limpiar espacios (SIN conversiones numéricas)
+          let codigoHoja = String(valorCelda).trim();
+          
+          // Incrementar contador de filas procesadas
+          filasProcesadas++;
+          
+          // Guardar para debugging (solo primeros 5)
+          if (codigosEncontrados.length < 5) {
+            codigosEncontrados.push({ original: valorCelda, string: codigoHoja });
+          }
+          
+          // Comparación EXACTA como STRING (preserva ceros a la izquierda y letras)
+          console.log(`Comparando: buscado="${codigoBuscado}" vs hoja="${codigoHoja}"`);
+          
+          if (codigoHoja === codigoBuscado) {
+            console.log('✓ Coincide por comparación exacta de strings');
+            
+            // Construir el array de datos completo
+            // Priorizar .f (formato) para preservar el formato original (ceros a la izquierda, etc.)
+            const data = row.c.map(c => {
+              if (!c) return "";
+              // Usar .f (formato) si está disponible, sino .v (valor)
+              const valor = c.f !== null && c.f !== undefined ? c.f : c.v;
+              if (valor === null || valor === undefined) return "";
+              return String(valor);
+            });
+            encontrado = data;
+            console.log('Activo encontrado:', encontrado);
+            break;
+          } else {
+            console.log(`✗ No coincide: "${codigoHoja}" !== "${codigoBuscado}"`);
+          }
+        }
+        
+        // Debugging (solo en consola)
+        console.log('Código buscado:', codigoBuscado);
+        console.log('Primeros códigos en hoja:', codigosEncontrados);
+
+        if (encontrado) {
+          div.innerHTML = `
+            <div class="card">
+              <h3>Activo ${encontrado[0] || 'N/A'}</h3>
+              <p><b>Descripción:</b> ${encontrado[1] || 'N/A'}</p>
+              <p><b>Ubicación:</b> ${encontrado[2] || 'N/A'}</p>
+              <p><b>Responsable:</b> ${encontrado[3] || 'N/A'}</p>
+              <p><b>Estado:</b> ${encontrado[4] || 'N/A'}</p>
+              <p><b>Observaciones:</b> ${encontrado[5] || 'Sin observaciones'}</p>
+            </div>
+          `;
+        } else {
+          div.innerHTML = `
+            <p style='color:red;'>Activo no encontrado. Verifique el código ingresado.</p>
+            <p style='font-size:12px; color:gray;'>Código buscado: "${codigoBuscado}" | Filas procesadas: ${filasProcesadas} | Total filas en hoja: ${rows.length}</p>
+          `;
+        }
+      } catch (error) {
+        console.error('Error al buscar activo:', error);
+        let mensajeError = 'Error al conectar con la base de datos. ';
+        if (error.message.includes('HTTP')) {
+          mensajeError += 'La hoja de Google Sheets podría no estar pública. Verifique que la hoja tenga permisos de "Cualquiera con el enlace puede ver".';
+        } else {
+          mensajeError += 'Verifique su conexión a internet.';
+        }
+        div.innerHTML = `<p style='color:red;'>${mensajeError}</p>`;
+      }
+    }
+
+    async function activarEscaner() {
+      const camaraContainer = document.getElementById('camaraContainer');
+      const reader = document.getElementById('reader');
+      
+      try {
+        html5QrCode = new Html5Qrcode("reader");
+        
+        await html5QrCode.start(
+          { facingMode: "environment" }, // Usa la cámara trasera en móviles
+          {
+            fps: 10,
+            qrbox: { width: 250, height: 250 }
+          },
+          (decodedText, decodedResult) => {
+            // Código detectado
+            document.getElementById('codigo').value = decodedText;
+            buscarActivo(decodedText);
+          },
+          (errorMessage) => {
+            // Ignorar errores de escaneo continuo
+          }
+        );
+        
+        camaraContainer.classList.add('activa');
+        document.getElementById('btnEscanear').style.display = 'none';
+      } catch (err) {
+        console.error('Error al iniciar cámara:', err);
+        alert('No se pudo acceder a la cámara. Asegúrese de dar permisos de cámara.');
+      }
+    }
+
+    async function cerrarCamara() {
+      if (html5QrCode) {
+        try {
+          await html5QrCode.stop();
+          await html5QrCode.clear();
+        } catch (err) {
+          console.error('Error al cerrar cámara:', err);
+        }
+        html5QrCode = null;
+      }
+      
+      const camaraContainer = document.getElementById('camaraContainer');
+      camaraContainer.classList.remove('activa');
+      document.getElementById('btnEscanear').style.display = 'inline-block';
+    }
+  </script>
+
+</body>
+</html>
+
