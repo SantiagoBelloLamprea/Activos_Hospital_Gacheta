@@ -6,6 +6,11 @@
   <title>Consulta de Activos - E.S.E. Hospital</title>
   <script src="https://unpkg.com/html5-qrcode@2.3.8/html5-qrcode.min.js"></script>
   <style>
+    /* Asegurar que html5-qrcode pueda renderizar correctamente */
+    #html5-qrcode-anchor-scan-type-change { display: none !important; }
+    #html5-qrcode-anchor-scan-type-change ~ div { display: none !important; }
+  </style>
+  <style>
     body { font-family: Arial; background: #f7f7f7; padding: 20px; max-width: 600px; margin: 0 auto; }
     .input-group { display: flex; gap: 10px; margin-bottom: 10px; flex-wrap: wrap; }
     input { padding: 10px; flex: 1; min-width: 150px; border: 1px solid #ddd; border-radius: 5px; }
@@ -16,12 +21,15 @@
     button#btnCerrarCamara { background: #f44336; }
     button#btnCerrarCamara:hover { background: #da190b; }
     .card { background: white; padding: 20px; border-radius: 10px; box-shadow: 0 2px 5px rgba(0,0,0,0.1); margin-top: 20px; }
-    #reader { width: 100%; margin: 20px 0; min-height: 300px; position: relative; }
-    #reader video { width: 100%; max-width: 500px; border-radius: 10px; background: #000; }
-    #reader canvas { display: none; }
-    .camara-container { display: none; text-align: center; padding: 20px; background: rgba(0,0,0,0.8); margin: 20px 0; border-radius: 10px; }
+    #reader { width: 100%; margin: 20px 0; min-height: 300px; position: relative; display: block !important; }
+    #reader video { width: 100% !important; max-width: 500px; border-radius: 10px; background: #000; display: block !important; visibility: visible !important; }
+    #reader img { display: none; }
+    #reader canvas { position: absolute; top: 0; left: 0; }
+    #reader > div { width: 100% !important; }
+    #reader > div > video { width: 100% !important; display: block !important; }
+    .camara-container { display: none; text-align: center; padding: 20px; background: rgba(0,0,0,0.9); margin: 20px 0; border-radius: 10px; }
     .camara-container.activa { display: block; }
-    .camara-container.activa #reader { display: block; }
+    .camara-container.activa #reader { display: block !important; visibility: visible !important; }
   </style>
 </head>
 <body>
@@ -299,24 +307,42 @@
       // Limpiar el contenedor
       reader.innerHTML = '';
       
+      // Asegurar que el contenedor tenga un tamaño definido
+      reader.style.minHeight = '300px';
+      reader.style.width = '100%';
+      
       // Pequeño delay para asegurar que el DOM se actualice
-      await new Promise(resolve => setTimeout(resolve, 100));
+      await new Promise(resolve => setTimeout(resolve, 300));
       
       try {
+        // Verificar que el elemento reader existe y es visible
+        if (!reader || reader.offsetWidth === 0) {
+          throw new Error('El contenedor de la cámara no está visible');
+        }
+        
         // Crear nueva instancia
         html5QrCode = new Html5Qrcode("reader");
         
         // Calcular el tamaño del qrbox según el tamaño de la pantalla
-        const qrboxSize = Math.min(250, window.innerWidth * 0.8);
+        const qrboxSize = Math.min(250, Math.min(window.innerWidth * 0.8, window.innerHeight * 0.4));
         
-        console.log('Iniciando escáner QR...');
+        console.log('Iniciando escáner QR...', { qrboxSize, readerWidth: reader.offsetWidth });
         
         await html5QrCode.start(
           { facingMode: "environment" }, // Usa la cámara trasera en móviles
           {
             fps: 10,
-            qrbox: { width: qrboxSize, height: qrboxSize },
-            aspectRatio: 1.0
+            qrbox: function(viewfinderWidth, viewfinderHeight) {
+              // Calcular el tamaño del qrbox dinámicamente
+              const minEdgePercentage = 0.7;
+              const minEdgeSize = Math.min(viewfinderWidth, viewfinderHeight);
+              const qrboxSize = Math.floor(minEdgeSize * minEdgePercentage);
+              return { width: qrboxSize, height: qrboxSize };
+            },
+            aspectRatio: 1.0,
+            videoConstraints: {
+              facingMode: "environment"
+            }
           },
           (decodedText, decodedResult) => {
             // Código detectado
@@ -333,6 +359,20 @@
             }
           }
         );
+        
+        // Esperar un momento y verificar que el video se haya renderizado
+        await new Promise(resolve => setTimeout(resolve, 500));
+        
+        // Verificar que hay un video en el reader
+        const video = reader.querySelector('video');
+        if (video) {
+          console.log('Video encontrado:', { width: video.videoWidth, height: video.videoHeight });
+          video.style.display = 'block';
+          video.style.width = '100%';
+          video.style.maxWidth = '500px';
+        } else {
+          console.warn('No se encontró elemento video en el reader');
+        }
         
         // Ocultar mensaje de carga cuando la cámara esté lista
         cameraLoading.style.display = 'none';
