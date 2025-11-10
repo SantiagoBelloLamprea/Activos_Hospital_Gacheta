@@ -4,7 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Consulta de Activos - E.S.E. Hospital</title>
-  <script src="https://unpkg.com/html5-qrcode"></script>
+  <script src="https://unpkg.com/html5-qrcode@2.3.8/html5-qrcode.min.js"></script>
   <style>
     body { font-family: Arial; background: #f7f7f7; padding: 20px; max-width: 600px; margin: 0 auto; }
     .input-group { display: flex; gap: 10px; margin-bottom: 10px; flex-wrap: wrap; }
@@ -16,10 +16,12 @@
     button#btnCerrarCamara { background: #f44336; }
     button#btnCerrarCamara:hover { background: #da190b; }
     .card { background: white; padding: 20px; border-radius: 10px; box-shadow: 0 2px 5px rgba(0,0,0,0.1); margin-top: 20px; }
-    #reader { width: 100%; margin: 20px 0; }
-    #reader video { width: 100%; border-radius: 10px; }
-    .camara-container { display: none; text-align: center; }
+    #reader { width: 100%; margin: 20px 0; min-height: 300px; position: relative; }
+    #reader video { width: 100%; max-width: 500px; border-radius: 10px; background: #000; }
+    #reader canvas { display: none; }
+    .camara-container { display: none; text-align: center; padding: 20px; background: rgba(0,0,0,0.8); margin: 20px 0; border-radius: 10px; }
     .camara-container.activa { display: block; }
+    .camara-container.activa #reader { display: block; }
   </style>
 </head>
 <body>
@@ -33,6 +35,7 @@
 
   <div id="camaraContainer" class="camara-container">
     <div id="reader"></div>
+    <div id="cameraLoading" style="color: white; padding: 20px; display: none;">Iniciando cámara...</div>
     <button id="btnCerrarCamara" onclick="cerrarCamara()">Cerrar Cámara</button>
   </div>
 
@@ -272,31 +275,85 @@
     async function activarEscaner() {
       const camaraContainer = document.getElementById('camaraContainer');
       const reader = document.getElementById('reader');
+      const btnEscanear = document.getElementById('btnEscanear');
+      
+      // Si ya hay una instancia activa, cerrarla primero
+      if (html5QrCode) {
+        try {
+          await html5QrCode.stop();
+          await html5QrCode.clear();
+        } catch (e) {
+          console.log('Limpiando instancia anterior:', e);
+        }
+        html5QrCode = null;
+      }
+      
+      // Mostrar el contenedor de la cámara primero
+      camaraContainer.classList.add('activa');
+      btnEscanear.style.display = 'none';
+      
+      // Mostrar mensaje de carga
+      const cameraLoading = document.getElementById('cameraLoading');
+      cameraLoading.style.display = 'block';
+      
+      // Limpiar el contenedor
+      reader.innerHTML = '';
+      
+      // Pequeño delay para asegurar que el DOM se actualice
+      await new Promise(resolve => setTimeout(resolve, 100));
       
       try {
+        // Crear nueva instancia
         html5QrCode = new Html5Qrcode("reader");
+        
+        // Calcular el tamaño del qrbox según el tamaño de la pantalla
+        const qrboxSize = Math.min(250, window.innerWidth * 0.8);
+        
+        console.log('Iniciando escáner QR...');
         
         await html5QrCode.start(
           { facingMode: "environment" }, // Usa la cámara trasera en móviles
           {
             fps: 10,
-            qrbox: { width: 250, height: 250 }
+            qrbox: { width: qrboxSize, height: qrboxSize },
+            aspectRatio: 1.0
           },
           (decodedText, decodedResult) => {
             // Código detectado
+            console.log('Código QR detectado:', decodedText);
             document.getElementById('codigo').value = decodedText;
             buscarActivo(decodedText);
+            // La cámara se cerrará automáticamente en buscarActivo
           },
           (errorMessage) => {
-            // Ignorar errores de escaneo continuo
+            // Ignorar errores de escaneo continuo (son normales mientras busca)
+            // Solo loguear si es un error importante
+            if (errorMessage && !errorMessage.includes('No QR code found')) {
+              console.log('Escaneando...', errorMessage);
+            }
           }
         );
         
-        camaraContainer.classList.add('activa');
-        document.getElementById('btnEscanear').style.display = 'none';
+        // Ocultar mensaje de carga cuando la cámara esté lista
+        cameraLoading.style.display = 'none';
+        console.log('Cámara iniciada correctamente');
       } catch (err) {
         console.error('Error al iniciar cámara:', err);
-        alert('No se pudo acceder a la cámara. Asegúrese de dar permisos de cámara.');
+        // Ocultar mensaje de carga
+        cameraLoading.style.display = 'none';
+        // Ocultar el contenedor si falla
+        camaraContainer.classList.remove('activa');
+        btnEscanear.style.display = 'inline-block';
+        
+        let mensajeError = 'No se pudo acceder a la cámara. ';
+        if (err.name === 'NotAllowedError' || err.name === 'PermissionDeniedError') {
+          mensajeError += 'Por favor, permita el acceso a la cámara en la configuración del navegador.';
+        } else if (err.name === 'NotFoundError' || err.name === 'DevicesNotFoundError') {
+          mensajeError += 'No se encontró ninguna cámara en el dispositivo.';
+        } else {
+          mensajeError += 'Error: ' + err.message;
+        }
+        alert(mensajeError);
       }
     }
 
